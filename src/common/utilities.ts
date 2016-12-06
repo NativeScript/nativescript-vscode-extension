@@ -283,7 +283,7 @@ export function stripTrailingSlash(aPath: string): string {
         .replace(/\\$/, '');
 }
 
-export function remoteObjectToValue(object: WebKitProtocol.Runtime.RemoteObject, stringify = true): { value: string, variableHandleRef: string } {
+export function remoteObjectToValue(object: Webkit.Runtime.RemoteObject, stringify = true): { value: string, variableHandleRef: string } {
     let value = '';
     let variableHandleRef: string;
 

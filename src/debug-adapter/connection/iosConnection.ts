@@ -5,9 +5,10 @@
 import * as net from 'net';
 import * as stream from 'stream';
 import {EventEmitter} from 'events';
-import {INSDebugConnection} from './INSDebugConnection';
+import {WebKitConnection} from './webKitConnection';
 import * as utils from '../../common/utilities';
 import {Services} from '../../services/debugAdapterServices';
+import {Tags} from '../../common/logger';
 
 interface IMessageWithId {
     id: number;
@@ -51,7 +52,7 @@ export class PacketStream extends stream.Transform {
  * Implements a Request/Response API on top of a Unix domain socket for messages that are marked with an `id` property.
  * Emits `message.method` for messages that don't have `id`.
  */
-class ResReqTcpSocket extends EventEmitter {
+class WebKitResReqUnixSocket extends EventEmitter {
     private _pendingRequests = new Map<number, any>();
     private _unixSocketAttached: Promise<net.Socket>;
 
@@ -139,94 +140,110 @@ class ResReqTcpSocket extends EventEmitter {
 /**
  * Connects to a target supporting the webkit protocol and sends and receives messages
  */
-export class IosConnection implements INSDebugConnection {
+export class IosConnection extends WebKitConnection {
     private _nextId = 1;
-    private _socket: ResReqTcpSocket;
+    private _socket: WebKitResReqUnixSocket;
 
     constructor() {
-        this._socket = new ResReqTcpSocket();
+        super();
+        this._socket = new WebKitResReqUnixSocket();
     }
 
-    public on(eventName: string, eventHandler: (eventParams: any) => void): void {
-        this._socket.on(eventName, eventHandler);
+    enable(): Promise<Webkit.Response<any>> {
+        return Promise.all([
+            this.sendMessage('Debugger.enable'),
+            this.sendMessage('Console.enable')]);
+    }
+
+    disable(): Promise<Webkit.Response<any>> {
+        return Promise.all([
+            this.sendMessage('Debugger.disable'),
+            this.sendMessage('Console.disable')]);
+    }
+
+    setBreakpoint(args: Webkit.Debugger.SetBreakpointParams): Promise<Webkit.Response<Webkit.Debugger.SetBreakpointResult>> {
+        return this.sendMessage('Debugger.setBreakpoint', args);
+    }
+
+    setBreakpointsActive?(args: Webkit.Debugger.SetBreakpointsActiveParams): Promise<Webkit.Response<any>> {
+        return this.sendMessage('Debugger.setBreakpointsActive', args);
+    }
+
+    setBreakpointByUrl(args: Webkit.Debugger.SetBreakpointByUrlParams): Promise<Webkit.Response<Webkit.Debugger.SetBreakpointByUrlResult>> {
+        return this.sendMessage('Debugger.setBreakpointByUrl', args);
+    }
+
+    removeBreakpoint(args: Webkit.Debugger.RemoveBreakpointParams ): Promise<Webkit.Response<any>> {
+        return this.sendMessage('Debugger.removeBreakpoint', args);
+    }
+
+    stepOver(): Promise<Webkit.Response<any>> {
+        return this.sendMessage('Debugger.stepOver');
+    }
+
+    stepInto(): Promise<Webkit.Response<any>> {
+        return this.sendMessage('Debugger.stepInto');
+    }
+
+    stepOut(): Promise<Webkit.Response<any>> {
+        return this.sendMessage('Debugger.stepOut');
+    }
+
+    pause(): Promise<Webkit.Response<any>> {
+        return this.sendMessage('Debugger.pause');
+    }
+
+    resume(): Promise<Webkit.Response<any>> {
+        return this.sendMessage('Debugger.resume');
+    }
+
+    getScriptSource(args: Webkit.Debugger.GetScriptSourceParams): Promise<Webkit.Response<Webkit.Debugger.GetScriptSourceResult>> {
+        return this.sendMessage('Debugger.getScriptSource', args);
+    }
+
+    setPauseOnExceptions(args: Webkit.Debugger.SetPauseOnExceptionsParams): Promise<Webkit.Response<any>> {
+        return this.sendMessage('Debugger.setPauseOnExceptions', args);
+    }
+
+    evaluateOnCallFrame(args: Webkit.Debugger.EvaluateOnCallFrameParams): Promise<Webkit.Response<Webkit.Debugger.EvaluateOnCallFrameResult>> {
+        return this.sendMessage('Debugger.evaluateOnCallFrame', args);
+    }
+
+    getProperties?(args: Webkit.Runtime.GetPropertiesParams): Promise<Webkit.Response<Webkit.Runtime.GetPropertiesResult>> {
+        return this.sendMessage('Runtime.getProperties', args);
+    }
+
+    evaluate?(args: Webkit.Runtime.EvaluateParams): Promise<Webkit.Response<Webkit.Runtime.EvaluateResult>> {
+        return this.sendMessage('Runtime.evaluate', args);
     }
 
     /**
      * Attach the underlying Unix socket
      */
     public attach(filePath: string): Promise<void> {
-        Services.logger().log('Attempting to attach to path ' + filePath);
-        return utils.retryAsync(() => this._attach(filePath), 6000)
-            .then(() => {
-                Promise.all<WebKitProtocol.Response>([
-                    this.sendMessage('Debugger.enable'),
-                    this.sendMessage('Console.enable'),
-                    this.sendMessage('Debugger.setBreakpointsActive', {active: true})
-                ]);
-            });
+        Services.logger().log(`Attempting to attach to path ${filePath}`, Tags.FrontendMessage);
+        return utils.retryAsync(() => this._socket.attach(filePath), 6000);
     }
 
-    public _attach(filePath: string): Promise<void> {
-        return this._socket.attach(filePath);
-    }
-
+    /**
+     * Close the underlying Unix socket
+     */
     public close(): void {
         this._socket.close();
     }
 
-    public debugger_setBreakpoint(location: WebKitProtocol.Debugger.Location, condition?: string): Promise<WebKitProtocol.Debugger.SetBreakpointResponse> {
-        return this.sendMessage('Debugger.setBreakpoint', <WebKitProtocol.Debugger.SetBreakpointParams>{ location, options: { condition: condition }});
+    /**
+     * Attach listeners for webkit events emitted by the underlying socket
+     */
+    public on(event: string | symbol, listener: Function): this {
+        this._socket.on(event, listener);
+        return this;
     }
 
-    public debugger_setBreakpointByUrl(url: string, lineNumber: number, columnNumber: number, condition: string, ignoreCount: number): Promise<WebKitProtocol.Debugger.SetBreakpointByUrlResponse> {
-        return this.sendMessage('Debugger.setBreakpointByUrl', <WebKitProtocol.Debugger.SetBreakpointByUrlParams>{ url: url, lineNumber: lineNumber, columnNumber: 0 /* a columnNumber different from 0 confuses the debugger */, options: { condition: condition, ignoreCount: ignoreCount }});
-    }
-
-    public debugger_removeBreakpoint(breakpointId: string): Promise<WebKitProtocol.Response> {
-        return this.sendMessage('Debugger.removeBreakpoint', <WebKitProtocol.Debugger.RemoveBreakpointParams>{ breakpointId });
-    }
-
-    public debugger_stepOver(): Promise<WebKitProtocol.Response> {
-        return this.sendMessage('Debugger.stepOver');
-    }
-
-    public debugger_stepIn(): Promise<WebKitProtocol.Response> {
-        return this.sendMessage('Debugger.stepInto');
-    }
-
-    public debugger_stepOut(): Promise<WebKitProtocol.Response> {
-        return this.sendMessage('Debugger.stepOut');
-    }
-
-    public debugger_resume(): Promise<WebKitProtocol.Response> {
-        return this.sendMessage('Debugger.resume');
-    }
-
-    public debugger_pause(): Promise<WebKitProtocol.Response> {
-        return this.sendMessage('Debugger.pause');
-    }
-
-    public debugger_evaluateOnCallFrame(callFrameId: string, expression: string, objectGroup = 'dummyObjectGroup', returnByValue?: boolean): Promise<WebKitProtocol.Debugger.EvaluateOnCallFrameResponse> {
-        return this.sendMessage('Debugger.evaluateOnCallFrame', <WebKitProtocol.Debugger.EvaluateOnCallFrameParams>{ callFrameId, expression, objectGroup, returnByValue });
-    }
-
-    public debugger_setPauseOnExceptions(state: string): Promise<WebKitProtocol.Response> {
-        return this.sendMessage('Debugger.setPauseOnExceptions', <WebKitProtocol.Debugger.SetPauseOnExceptionsParams>{ state });
-    }
-
-    public debugger_getScriptSource(scriptId: WebKitProtocol.Debugger.ScriptId): Promise<WebKitProtocol.Debugger.GetScriptSourceResponse> {
-        return this.sendMessage('Debugger.getScriptSource', <WebKitProtocol.Debugger.GetScriptSourceParams>{ scriptId });
-    }
-
-    public runtime_getProperties(objectId: string, ownProperties: boolean, accessorPropertiesOnly: boolean): Promise<WebKitProtocol.Runtime.GetPropertiesResponse> {
-        return this.sendMessage('Runtime.getProperties', <WebKitProtocol.Runtime.GetPropertiesParams>{ objectId, ownProperties, accessorPropertiesOnly });
-    }
-
-    public runtime_evaluate(expression: string, objectGroup = 'dummyObjectGroup', contextId?: number, returnByValue = false): Promise<WebKitProtocol.Runtime.EvaluateResponse> {
-        return this.sendMessage('Runtime.evaluate', <WebKitProtocol.Runtime.EvaluateParams>{ expression, objectGroup, contextId, returnByValue });
-    }
-
-    private sendMessage(method: string, params?: any): Promise<WebKitProtocol.Response> {
+    /**
+     * Sends message over the underlying unix socket
+    */
+    private sendMessage(method: string, params?: any): Promise<Webkit.Response<any>> {
         return this._socket.sendMessage({
             id: this._nextId++,
             method: method,

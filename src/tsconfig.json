@@ -16,6 +16,7 @@
         "custom-typings/universal-analytics/ua.d.ts",
         "custom-typings/debugProtocolExtensions.d.ts",
         "custom-typings/webKitProtocol.d.ts",
+        "custom-typings/webKitProtocolExtensions.d.ts",
 
         "./debug-adapter/webKitDebug.ts",
         "./main.ts",
